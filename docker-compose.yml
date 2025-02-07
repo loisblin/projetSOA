@@ -1,0 +1,149 @@
+
+services:
+  rabbitmq:
+    image: "rabbitmq:management"
+    container_name: "rabbitmq"
+    ports:
+      - "15672:15672"  # Interface de gestion de RabbitMQ
+      - "5672:5672"    # Port de communication de RabbitMQ
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - backend_network
+  # Service pour Kafka
+  kafka:
+    image: "docker.io/bitnami/kafka:2-debian-10"
+    container_name: kafka
+    ports:
+      - 9092:9092
+      - 9093:9093
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=CLIENT://:9092,EXTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://kafka:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=CLIENT
+    depends_on:
+      - zookeeper
+    networks:
+      - backend_network
+  # Zookeeper nécessaire pour Kafka
+  zookeeper:
+    image: "docker.io/bitnami/zookeeper:3-debian-10"
+    container_name: zookeeper
+    ports:
+      - 2181:2181
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    networks:
+      - backend_network
+  mongo-db:
+    image: mongo:latest
+    container_name: mongo-db
+    ports:
+      - "27017:27017"   
+    volumes:
+      - mongo-data:/data/db   
+    networks:
+      - backend_network   # Correction : même réseau que les autres services
+  api:
+    container_name: api
+    build:
+      context: ./back
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    volumes:
+      - ./back:/usr/src/app
+      - /usr/src/app/node_modules
+    command: npm run start:dev api
+    networks:
+      - backend_network   # Correction : même réseau que les autres services
+
+  auth:
+    build:
+      context: ./back
+      dockerfile: apps/auth/Dockerfile
+    container_name: auth
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    ports:
+      - "4000:4000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      
+    volumes:
+      - ./back:/usr/src/app
+      - /usr/src/app/node_modules
+    command: npm run start:dev auth
+    networks:
+      - backend_network 
+  order:
+    build:
+      context: ./back
+      dockerfile: apps/order/Dockerfile
+    container_name: order
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    ports:
+      - "3001:3001"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./back:/usr/src/app
+      - /usr/src/app/node_modules
+    command: npm run start:dev order
+    networks:
+      - backend_network   
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    container_name: front
+    volumes:
+      - ./front:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=development
+    command: ["npm", "run", "dev", "--", "--host"]
+
+  microfrontend:
+    build:
+      context: ./gestion-commande  # Ici, gestion est ton microfrontend
+      dockerfile: Dockerfile
+    container_name: microfrontend
+    volumes:
+      - ./gestion-commande:/app  # Utilise le volume spécifique pour le microfrontend
+      - /app/node_modules
+    ports:
+      - "5174:5174"
+    environment:
+      - NODE_ENV=development
+    command: ["npm", "run", "start", "--", "--host"]
+    
+volumes:
+  mongo-data:
+    driver: local
+
+networks:
+  backend_network :  # Correction : Un seul réseau pour tout le projet
+    driver: bridge
